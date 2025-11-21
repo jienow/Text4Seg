@@ -665,12 +665,12 @@ class LazySupervisedDataset(Dataset):
 
         # 665k+refseg
         list_665k = json.load(open('./playground/data/llava_v1_5_mix665k.json', "r"))
-        list_refcoco = json.load(open('./playground/data/json_files/refcoco_16_two_round_2.json', "r"))
-        list_refcocoplus = json.load(open('./playground/data/json_files/refcoco+_16_two_round_2.json', "r"))
-        list_refcocog = json.load(open('./playground/data/json_files/refcocog_16_two_round_2.json', "r"))
-        list_refclef = json.load(open('./playground/data/json_files/refclef_16_two_round_2.json', "r"))
-        ref_seg = list_refcoco + list_refcocoplus + list_refcocog + list_refclef
-        list_data_dict = list_665k + ref_seg * 3
+        #list_refcoco = json.load(open('./playground/data/json_files/refcoco_16_two_round_2.json', "r"))
+        #list_refcocoplus = json.load(open('./playground/data/json_files/refcoco+_16_two_round_2.json', "r"))
+        #list_refcocog = json.load(open('./playground/data/json_files/refcocog_16_two_round_2.json', "r"))
+        #list_refclef = json.load(open('./playground/data/json_files/refclef_16_two_round_2.json', "r"))
+        #ref_seg = list_refcoco # + list_refcocoplus + list_refcocog + list_refclef
+        list_data_dict = list_665k #  + ref_seg * 3
 
         # ovs
         # list_cocostuff = json.load(open('./playground/data/json_files/cocostuff_32_two_round_10.json', "r"))

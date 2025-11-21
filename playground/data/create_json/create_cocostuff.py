@@ -4,6 +4,7 @@ from PIL import Image
 import random
 from question_answer_list import QUESTION_ALL, QUESTION_PARTIAL, QUESTION_CONDITION, ANSWER_ALL, ANSWER_PARTIAL, ANSWER_CONDITION
 from utils import encode_mask, random_crop
+from tqdm import tqdm
 
 h_new = w_new = 32
 images_path = "./playground/data/coco/train2017"
@@ -18,7 +19,7 @@ with open("./playground/data/create_json/cls_coco_stuff.txt") as f:
 Content = []
 i = 0
 for _ in range(10):
-    for image_file in os.listdir(images_path):
+    for image_file in tqdm(os.listdir(images_path)):
         item = {}
         item["id"] = image_file.split(".")[0]
         item["image"] = "coco/train2017/" + image_file

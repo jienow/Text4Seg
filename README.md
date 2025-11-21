@@ -69,7 +69,8 @@ conda activate text4seg
 
 # install torch and dependencies
 pip install -e ".[train]"
-pip install flash-attn --no-build-isolation
+pip install flash-attn --no-build-isolation # pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.3.4/flash_attn-2.3.4+cu117torch2.0cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+
 ```
 
 **For the project based on ms-swift (Tables 1, 2, 3)**, please check out [Text4Seg/ms-swift](https://github.com/mc-lan/Text4Seg/tree/main/ms-swift).

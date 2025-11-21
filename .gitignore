@@ -31,3 +31,10 @@ ckpts*
 
 # Demo
 serve_images/
+/text4seg/
+/pre_trained/
+llava/model/segment_anything/
+playground/data/coco
+playground/data/downloads
+playground/data/coco_stuff
+/.env

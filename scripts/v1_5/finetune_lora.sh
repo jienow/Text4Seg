@@ -1,6 +1,6 @@
 #!/bin/bash
 
-deepspeed llava/train/train_xformers.py \
+deepspeed  --include localhost:3 llava/train/train_xformers.py \
     --lora_enable True --lora_r 64 --lora_alpha 128 --mm_projector_lr 2e-5 \
     --deepspeed ./scripts/zero2.json \
     --model_name_or_path ./pre_trained/vicuna-7b-v1.5/ \
