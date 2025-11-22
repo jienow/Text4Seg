@@ -38,3 +38,5 @@ playground/data/coco
 playground/data/downloads
 playground/data/coco_stuff
 /.env
+/.vscode/
+/test/
