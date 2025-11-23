@@ -779,6 +779,10 @@ import torch
 
 
 def get_output(text, img_path, reasoning_model, predictor, processor, h=24, w=24):
+    import debugpy
+    debugpy.listen(("127.0.0.1", 5678))
+    print("✅ Debugpy listening on port 5678... Attach from VSCode now!")
+    debugpy.wait_for_client()
     """
     text: referring instruction
     img_path: path to image
@@ -789,27 +793,27 @@ def get_output(text, img_path, reasoning_model, predictor, processor, h=24, w=24
     """
 
     # 1. 读取图像并 resize 成 LLaVA 输入
-    image = Image.open(img_path).convert("RGB")
+    image = Image.open(img_path).convert("RGB") # <PIL.Image.Image image mode=RGB size=800x600 at 0x7EFBC3CCF8B0>
     new_w, new_h = 336, 336
-    image_new = image.resize((new_w, new_h), Image.BILINEAR)
+    image_new = image.resize((new_w, new_h), Image.BILINEAR) # <PIL.Image.Image image mode=RGB size=336x336 at 0x7EFBC3CCE440>
 
     # 2. 构造 prompt（和 model_refer_seg.py 完全一致）
-    text_clean = text.replace(",", "")
-    qs = random.choice(QUESTION_PARTIAL).replace("[class_name]", text_clean)
+    text_clean = text.replace(",", "") 
+    qs = random.choice(QUESTION_PARTIAL).replace("[class_name]", text_clean) # "Where is '棉铃虫' in this image? Please output segmentation mask."
 
     if reasoning_model.config.mm_use_im_start_end:
         qs = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + '\n' + qs
     else:
         qs = DEFAULT_IMAGE_TOKEN + '\n' + qs
-
-    conv = conv_templates["llava_v1"].copy()
+    # qs "<image>\nWhere is '棉铃虫' in this image? Please output segmentation mask."
+    conv = conv_templates["llava_v1"].copy() # Conversation(system="A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions.", roles=('USER', 'ASSISTANT'), messages=[], offset=0, sep_style=<SeparatorStyle.TWO: 2>, sep=' ', sep2='</s>', version='v1', skip_next=False)
     conv.append_message(conv.roles[0], qs)
     conv.append_message(conv.roles[1], None)
-    prompt = conv.get_prompt()
+    prompt = conv.get_prompt() # "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions. USER: <image>\nWhere is '棉铃虫' in this image? Please output segmentation mask. ASSISTANT:"
 
     # 3. 图像预处理（LLaVA CLIP-ViT）
-    image_tensor = process_images([image_new], processor.image_processor, reasoning_model.config)[0]
-    input_ids = tokenizer_image_token(prompt, processor.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt')
+    image_tensor = process_images([image_new], processor.image_processor, reasoning_model.config)[0] # torch.Size([3, 336, 336])
+    input_ids = tokenizer_image_token(prompt, processor.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt') # torch.Size([66])
 
     # 4. LLaVA 生成 coarse mask 序列
     with torch.inference_mode():
@@ -825,37 +829,37 @@ def get_output(text, img_path, reasoning_model, predictor, processor, h=24, w=24
         )
 
     # 5. 解码 <seg>...</seg>
-    outputs = processor.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
+    outputs = processor.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip() # "Sure, Here's the segmentation of the 棉铃虫:\n<seg>棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n</seg>"
 
     try:
-        mask_labels = outputs.split("<seg>")[1].split("</seg>")[0]
-        mask_labels = decode_mask(mask_labels)
+        mask_labels = outputs.split("<seg>")[1].split("</seg>")[0] # '棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n'
+        mask_labels = decode_mask(mask_labels)  # '棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫'
         pred_mask = translate_sequence(mask_labels)
     except:
         # generate failure → zero mask
-        pred_mask = [0] * (h * w)
+        pred_mask = [0] * (h * w) # [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ...]
 
     # 6. 修正序列长度
     if len(pred_mask) < h * w:
         pred_mask = pred_mask + [pred_mask[-1]] * (h * w - len(pred_mask))
     else:
-        pred_mask = pred_mask[:h * w]
+        pred_mask = pred_mask[:h * w] # [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ...]
 
-    pred_mask = torch.tensor(pred_mask).reshape(h, w)
+    pred_mask = torch.tensor(pred_mask).reshape(h, w) # torch.Size([24, 24])
 
     # 二值化
-    pred_mask = (pred_mask > 0).int()
+    pred_mask = (pred_mask > 0).int() # torch.Size([24, 24])
 
     # 7. 上采样 coarse mask → 原图大小
-    H, W = image.size[1], image.size[0]
-    coarse_mask = F.interpolate(pred_mask[None, None].double(), size=(H, W), mode='nearest')[0,0]
+    H, W = image.size[1], image.size[0] # (600, 800)
+    coarse_mask = F.interpolate(pred_mask[None, None].double(), size=(H, W), mode='nearest')[0,0] # torch.Size([600, 800])
 
     # 8. SAM refine
-    predictor.set_image(np.array(image))
+    predictor.set_image(np.array(image)) # <llava.model.segment_anything.predictor.SamPredictor object at 0x7efa47f43f40>
 
     if 1 not in pred_mask:
         # no positive region
-        final_mask = np.zeros((H, W), dtype=np.uint8)
+        final_mask = np.zeros((H, W), dtype=np.uint8) # (600, 800)
     else:
         # coarse logits
         logits = compute_logits_from_mask(coarse_mask.double())
@@ -880,8 +884,8 @@ def get_output(text, img_path, reasoning_model, predictor, processor, h=24, w=24
             )
 
         final_mask = sam_mask[0].astype("uint8")
-        
-    final_mask = torch.tensor(final_mask, dtype=torch.uint8).cuda()   # 如果模型在 GPU
+
+    final_mask = torch.tensor(final_mask, dtype=torch.uint8).cuda()   # 如果模型在 GPU torch.Size([600, 800])
     return final_mask
 
 
@@ -1229,5 +1233,5 @@ def main():
     # out_mask = get_output(query,img_path,reasoning_model,segmentation_model,processor)
 if __name__ == "__main__":
     # os.environ["FLASH_ATTENTION_FORCE_DISABLED"] = "1"
-    # os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "3"
     main()

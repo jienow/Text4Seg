@@ -112,6 +112,11 @@ def eval_model(args):
     # Model
     disable_torch_init()
 
+    import debugpy
+    debugpy.listen(("127.0.0.1", 5678))
+    print("✅ Debugpy listening on port 5678... Attach from VSCode now!")
+    debugpy.wait_for_client()
+
     model_name = get_model_name_from_path(args.model_path)
     tokenizer, model, image_processor, context_len = load_pretrained_model(
         args.model_path, args.model_base, model_name
@@ -133,7 +138,7 @@ def eval_model(args):
             qs = image_token_se + "\n" + qs
         else:
             qs = DEFAULT_IMAGE_TOKEN + "\n" + qs
-
+    # '<image>\nPlease segment the white horse in this image.'
     if "llama-2" in model_name.lower():
         conv_mode = "llava_llama_2"
     elif "mistral" in model_name.lower():
@@ -141,13 +146,13 @@ def eval_model(args):
     elif "v1.6-34b" in model_name.lower():
         conv_mode = "chatml_direct"
     elif "v1" in model_name.lower():
-        conv_mode = "llava_v1"
+        conv_mode = "llava_v1" # 进入这里
     elif "mpt" in model_name.lower():
         conv_mode = "mpt"
     else:
         conv_mode = "llava_v0"
 
-    if args.conv_mode is not None and conv_mode != args.conv_mode:
+    if args.conv_mode is not None and conv_mode != args.conv_mode: # 'llava_v1'
         print(
             "[WARNING] the auto inferred conversation mode is {}, while `--conv-mode` is {}, using {}".format(
                 conv_mode, args.conv_mode, args.conv_mode
@@ -159,9 +164,9 @@ def eval_model(args):
     conv = conv_templates[args.conv_mode].copy()
     conv.append_message(conv.roles[0], qs)
     conv.append_message(conv.roles[1], None)
-    prompt = conv.get_prompt()
-
-    image_files = image_parser(args)
+    prompt = conv.get_prompt() 
+    # "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions.USER: <image>\nPlease segment the white horse in this image. ASSISTANT:"
+    image_files = image_parser(args) # ['images/horses.jpg']
     images = load_images(image_files)
     images_ori = images[0]
     w_ori, h_ori = images_ori.size
@@ -170,15 +175,15 @@ def eval_model(args):
         image = image.resize((336, 336), Image.BILINEAR)
         images_new.append(image)
 
-    image_sizes = [x.size for x in images_new]
-    images = [x for x in images_new]
-    images_tensor = process_images(
+    image_sizes = [x.size for x in images_new] # [(336, 336)]
+    images = [x for x in images_new] # PIL.Image.Image
+    images_tensor = process_images( # torch.Size([1, 3, 336, 336])
         images,
         image_processor,
         model.config
     ).to(model.device, dtype=torch.float16)
 
-    input_ids = (
+    input_ids = ( # torch.Size([1, 52])
         tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
         .unsqueeze(0)
         .cuda()
@@ -186,7 +191,7 @@ def eval_model(args):
 
     with torch.inference_mode():
         predictor.set_image(np.array(images_ori))
-        output_ids = model.generate(
+        output_ids = model.generate( # torch.Size([1, 143])
             input_ids,
             images=[images_tensor],
             image_sizes=image_sizes,
@@ -198,7 +203,7 @@ def eval_model(args):
             use_cache=True,
         )
 
-    outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
+    outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip() # "Sure, the segmented output for 'white horse' is:\n<seg>others *16\n others *16\n others *16\n others *16\n others *16\n others *16\n others *16\n others *16\n others *7| white horse *1| others *8\n others *7| white horse *3| others *6\n others *8| white horse *3| others *5\n others *8| white horse *2| others *6\n others *9| white horse *1| others *6\n others *16\n others *16\n others *16\n</seg>"
 
     print(outputs)
 
@@ -209,20 +214,20 @@ def eval_model(args):
     h, w = 24, 24
 
     # get context between <seg> and </seg>
-    mask_labels = outputs.split("<seg>")[1].split("</seg>")[0]
-    mask_labels = decode_mask(mask_labels)
-    pred_mask = translate_sequence(mask_labels)
+    mask_labels = outputs.split("<seg>")[1].split("</seg>")[0] # 'others *16\n others *16\n others *16\n others *16\n others *16\n others *16\n others *16\n others *16\n others *7| white horse *1| others *8\n others *7| white horse *3| others *6\n others *8| white horse *3| others *5\n others *8| white horse *2| others *6\n others *9| white horse *1| others *6\n others *16\n others *16\n others *16\n'
+    mask_labels = decode_mask(mask_labels) # 'others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|white horse|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|white horse|white horse|white horse|others|others|others|others|others|others|others|others|others|others|others|others|others|others|white horse|white horse|white horse|others|others|others|others|others|others|others|others|others|others|others|others|others|white horse|white horse|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|white horse|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others'
+    pred_mask = translate_sequence(mask_labels) # [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ...]
     if len(pred_mask) < h * w:
         pred_mask = pred_mask + [pred_mask[-1]] * (h * w - len(pred_mask))
     elif len(pred_mask) > h * w:
         pred_mask = pred_mask[:h * w]
 
-    mask = torch.tensor(pred_mask).reshape(h, w)
+    mask = torch.tensor(pred_mask).reshape(h, w) # torch.Size([24, 24])
 
-    mask_pred = F.interpolate(mask.unsqueeze(0).unsqueeze(0).double(), size=(h_ori, w_ori), mode='nearest').squeeze(0).squeeze(0)
+    mask_pred = F.interpolate(mask.unsqueeze(0).unsqueeze(0).double(), size=(h_ori, w_ori), mode='nearest').squeeze(0).squeeze(0) # torch.Size([1367, 2048])
 
-    new_mask_pred = np.zeros((mask_pred.shape[0], mask_pred.shape[1]))
-    unique_classes = np.unique(mask_pred)
+    new_mask_pred = np.zeros((mask_pred.shape[0], mask_pred.shape[1])) # (1367, 2048)
+    unique_classes = np.unique(mask_pred) # (2,)
 
     for class_id in unique_classes:
         # Skip if the class_id is the background (e.g., class 0 if it's background)
@@ -230,13 +235,13 @@ def eval_model(args):
             continue
 
         # Create a binary mask for the current class
-        binary_mask = (mask_pred == class_id).to(torch.float64)  # Binary mask for current class
+        binary_mask = (mask_pred == class_id).to(torch.float64)  # Binary mask for current class torch.Size([1367, 2048])
 
         try:
-            logits = compute_logits_from_mask(binary_mask)
-            point_coords, point_labels = masks_sample_points(binary_mask)
+            logits = compute_logits_from_mask(binary_mask) # (1, 256, 256)
+            point_coords, point_labels = masks_sample_points(binary_mask) # (40, 2) (40,)
             
-            sam_mask, score, logit = predictor.predict(
+            sam_mask, score, logit = predictor.predict( # (1, 1367, 2048) (1,) (1, 256, 256)
                 point_coords=point_coords,
                 point_labels=point_labels,
                 mask_input=logits,
@@ -244,7 +249,7 @@ def eval_model(args):
             )
 
             for iter in range(2):
-                sam_mask, score, logit = predictor.predict(
+                sam_mask, score, logit = predictor.predict( # (1, 1367, 2048) (1,) (1, 256, 256)
                     point_coords=point_coords,
                     point_labels=point_labels,
                     mask_input=logit,
@@ -256,10 +261,10 @@ def eval_model(args):
             sam_mask = np.zeros((h_ori, w_ori))
 
         # Add the processed mask back to the new mask for this class
-        new_mask_pred[sam_mask[0] > 0] = class_id
-    sam_mask = new_mask_pred
+        new_mask_pred[sam_mask[0] > 0] = class_id # class_id 1.0 new_mask_pred (1367, 2048)
+    sam_mask = new_mask_pred # (1, 1367, 2048)
 
-    sam_mask_s = sam_mask.astype("uint8")
+    sam_mask_s = sam_mask.astype("uint8") # (1367, 2048)
     sam_mask_s = Image.fromarray(sam_mask_s).convert('L')
 
     sam_mask_s.save("images/horse_mask.png")
