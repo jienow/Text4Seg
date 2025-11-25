@@ -1,34 +1,26 @@
 import argparse
-#from transformers import Qwen2VLForConditionalGeneration, Qwen2_5_VLForConditionalGeneration, AutoProcessor
-# from qwen_vl_utils import process_vision_info
 import torch.nn.functional as F
 import json
 from functools import partial
 import cv2
 import random
 from itertools import combinations
-# from datasets import load_from_disk
 import tqdm
-# import pdb
 from torch.utils.tensorboard import SummaryWriter
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "3"
-from PIL import Image #  as PILImage
+from PIL import Image
 import re
-# from sam2.sam2_image_predictor import SAM2ImagePredictor
 import numpy as np
-# import matplotlib.pyplot as plt
 from enum import Enum
 from llava.model.builder import load_pretrained_model
 from llava.mm_utils import get_model_name_from_path
-from llava.eval.question_answer_list import QUESTION_PARTIAL
 from llava.conversation import conv_templates
 from llava.mm_utils import process_images
 import torch 
-from torchvision import transforms
 
 # LLaVA conversation模板
-from llava.conversation import conv_templates, SeparatorStyle
+from llava.conversation import conv_templates
 
 # 常量：IMAGE_TOKEN、<im_start>、<im_end> 等
 from llava.constants import (
@@ -58,7 +50,7 @@ from llava.eval.utils import (
     # translate_sequence,
     # decode_mask
 )
-from llava.eval.run_llava import translate_sequence
+from llava.eval.run_llava import translate_sequence, decode_mask
 
 # 参考表达生成模板
 from llava.eval.question_answer_list import QUESTION_PARTIAL
@@ -75,10 +67,6 @@ from llava.constants import (
 query_template = "Please segment the {} in this image."
 from llava.model.segment_anything import SamPredictor, sam_model_registry
 from types import SimpleNamespace
-from llava.eval.refer_seg_dataset import ValDataset
-
-from llava.eval.model_refer_seg import CustomDataset
-from torch.utils.data import Dataset, DataLoader
 
 ANSWER_LIST_PEST = [
     "是 [SEG]。",
@@ -1288,5 +1276,5 @@ def main():
     # out_mask = get_output(query,img_path,reasoning_model,segmentation_model,processor)
 if __name__ == "__main__":
     # os.environ["FLASH_ATTENTION_FORCE_DISABLED"] = "1"
-    os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+    # os.environ["CUDA_VISIBLE_DEVICES"] = "2"
     main()
