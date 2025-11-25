@@ -2,7 +2,6 @@ import argparse
 #from transformers import Qwen2VLForConditionalGeneration, Qwen2_5_VLForConditionalGeneration, AutoProcessor
 # from qwen_vl_utils import process_vision_info
 import torch.nn.functional as F
-import torch
 import json
 from functools import partial
 import cv2
@@ -18,19 +17,15 @@ from PIL import Image #  as PILImage
 import re
 # from sam2.sam2_image_predictor import SAM2ImagePredictor
 import numpy as np
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 from enum import Enum
 from llava.model.builder import load_pretrained_model
 from llava.mm_utils import get_model_name_from_path
 from llava.eval.question_answer_list import QUESTION_PARTIAL
 from llava.conversation import conv_templates
 from llava.mm_utils import process_images
-import torch
-import torch.nn.functional as F
-import numpy as np
-from PIL import Image
-import random
-import os
+import torch 
+from torchvision import transforms
 
 # LLaVA conversation模板
 from llava.conversation import conv_templates, SeparatorStyle
@@ -60,14 +55,41 @@ from llava.model.segment_anything import (
 from llava.eval.utils import (
     compute_logits_from_mask,
     masks_sample_points,
-    translate_sequence,
-    decode_mask
+    # translate_sequence,
+    # decode_mask
 )
+from llava.eval.run_llava import translate_sequence
 
 # 参考表达生成模板
 from llava.eval.question_answer_list import QUESTION_PARTIAL
+import numpy as np
+from PIL import Image
+import torch
+from llava.constants import (
+    IMAGE_TOKEN_INDEX,
+    DEFAULT_IMAGE_TOKEN,
+    DEFAULT_IM_START_TOKEN,
+    DEFAULT_IM_END_TOKEN,
+    IMAGE_PLACEHOLDER,
+)
+query_template = "Please segment the {} in this image."
+from llava.model.segment_anything import SamPredictor, sam_model_registry
+from types import SimpleNamespace
+from llava.eval.refer_seg_dataset import ValDataset
+
+from llava.eval.model_refer_seg import CustomDataset
+from torch.utils.data import Dataset, DataLoader
 
 
+def decode_mask(encoded_str):
+    rows = encoded_str.strip("\n").split("\n ")
+    decoded_list = []
+    for row in rows:
+        tokens = row.split("| ")
+        for token in tokens:
+            label, count = token.split(" *")
+            decoded_list.extend([label] * int(count))
+    return "|".join(decoded_list)
 
 ANSWER_LIST_PEST = [
     "是 [SEG]。",
@@ -105,16 +127,11 @@ class ValDatasetPest(torch.utils.data.Dataset):
     def __init__(
         self,
         base_image_dir,
-        vision_tower,
         val_dataset,
         image_size=1024,
         image_root_path=None,
-        reason_seg_data_add=None,
-        reason_image_root_path=None
     ):
         self.image_root_path = image_root_path
-        self.reason_seg_data_add=reason_seg_data_add
-        self.reason_image_root_path=reason_image_root_path
         self.base_image_dir = base_image_dir
         self.answer_list = ANSWER_LIST_PEST
         splits = val_dataset.split("|")
@@ -122,53 +139,24 @@ class ValDatasetPest(torch.utils.data.Dataset):
             ds, split = splits
             images = []
             jsons = []
-            if self.reason_seg_data_add is not None:
-                whole_path = os.path.join(reason_seg_data_add, 'reason_seg', ds, "val")
-                if not os.path.exists(whole_path):
-                    print(f"路径不存在: {whole_path}")
-                image_root_path = self.reason_image_root_path
+            whole_path = os.path.join(base_image_dir, 'reason_seg', ds, "val")
+            if not os.path.exists(whole_path):
+                print(f"路径不存在: {whole_path}")
 
-                for root, dirs, files in os.walk(whole_path):
-                    for file in files:
-                        json_path = os.path.join(root, file)
-                        assert os.path.exists(json_path)
+            image_root_path = self.image_root_path
 
-                        jsons.append(json_path)
-                        file_name = file.split(".")[0]
-                        image_file_name = str(file_name) + ".jpg"
+            for root, dirs, files in os.walk(whole_path):
+                for file in files:
+                    json_path = os.path.join(root, file)
+                    assert os.path.exists(json_path)
 
-                        image_path = os.path.join(image_root_path, image_file_name)
-                        if not os.path.exists(image_path):
-                            image_root_path2 = "/home/luohuibin/pycharm_workspace/PixelLM-main/pest24_data/4k_image"
-                            image_path = os.path.join(image_root_path2, image_file_name)
-                            if not os.path.exists(image_path):
-                                image_path = os.path.join(image_root_path2, str(file_name.replace("xt_", "")) + ".png")
-                        assert os.path.exists(image_path)
-                        images.append(image_path)
-            else:
-                whole_path = os.path.join(base_image_dir, 'reason_seg', ds, "val")
-                if not os.path.exists(whole_path):
-                    print(f"路径不存在: {whole_path}")
+                    jsons.append(json_path)
+                    file_name = file.split(".")[0]
+                    image_file_name = str(file_name) + ".jpg"
 
-                image_root_path = self.image_root_path
-
-                for root, dirs, files in os.walk(whole_path):
-                    for file in files:
-                        json_path = os.path.join(root, file)
-                        assert os.path.exists(json_path)
-
-                        jsons.append(json_path)
-                        file_name = file.split(".")[0]
-                        image_file_name = str(file_name) + ".jpg"
-
-                        image_path = os.path.join(image_root_path, image_file_name)
-                        if not os.path.exists(image_path):
-                            image_root_path2 = "/home/luohuibin/pycharm_workspace/PixelLM-main/pest24_data/4k_image"
-                            image_path = os.path.join(image_root_path2, image_file_name)
-                            # if not os.path.exists(image_path):
-                            #     image_path = os.path.join(image_root_path2, str(file_name.replace("xt_", "")) + ".png")
-                        assert os.path.exists(image_path)
-                        images.append(image_path)
+                    image_path = os.path.join(image_root_path, image_file_name)
+                    assert os.path.exists(image_path)
+                    images.append(image_path)
             self.jsons = jsons
             self.images = images
 
@@ -176,9 +164,6 @@ class ValDatasetPest(torch.utils.data.Dataset):
 
         self.ds = ds
         self.image_size = image_size
-        # self.tokenizer = tokenizer
-        # self.transform = ResizeLongestSide(image_size)
-        # self.clip_image_processor = CLIPImageProcessor.from_pretrained(vision_tower)
         self.class_name_answer = ANSWER_LIST_MODE4_TEMPLATE_PEST
         self.class_name_answer_non = ANSWER_LIST_MODE4_TEMPLATE_NON_PEST
     def __len__(self):
@@ -773,125 +758,170 @@ def extract_bbox_points_think(output_text, x_factor, y_factor):
 
     return content_bbox, points, think_text
 
-import numpy as np
-from PIL import Image
-import torch
 
 
-def get_output(text, img_path, reasoning_model, predictor, processor, h=24, w=24):
-    import debugpy
-    debugpy.listen(("127.0.0.1", 5678))
-    print("✅ Debugpy listening on port 5678... Attach from VSCode now!")
-    debugpy.wait_for_client()
-    """
-    text: referring instruction
-    img_path: path to image
-    reasoning_model: LLaVA model loaded with load_pretrained_model
-    predictor: SamPredictor (SAM Vit-H)
-    processor: tokenizer & image processor
-    h, w: mask resolution from model path (p16 -> 16x16, p24 -> 24x24)
-    """
-
-    # 1. 读取图像并 resize 成 LLaVA 输入
-    image = Image.open(img_path).convert("RGB") # <PIL.Image.Image image mode=RGB size=800x600 at 0x7EFBC3CCF8B0>
-    new_w, new_h = 336, 336
-    image_new = image.resize((new_w, new_h), Image.BILINEAR) # <PIL.Image.Image image mode=RGB size=336x336 at 0x7EFBC3CCE440>
-
-    # 2. 构造 prompt（和 model_refer_seg.py 完全一致）
-    text_clean = text.replace(",", "") 
-    qs = random.choice(QUESTION_PARTIAL).replace("[class_name]", text_clean) # "Where is '棉铃虫' in this image? Please output segmentation mask."
-
-    if reasoning_model.config.mm_use_im_start_end:
-        qs = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + '\n' + qs
+def get_output(query, img_path, reason_model, predictor, processor, args):    
+    model_name = get_model_name_from_path(args.reasoning_model_path)
+    tokenizer = processor.tokenizer
+    image_processor = processor.image_processor
+    model = reason_model
+    qs = query
+    qs = query_template.format(qs)
+    image_token_se = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN
+    if IMAGE_PLACEHOLDER in qs:
+        if model.config.mm_use_im_start_end:
+            qs = re.sub(IMAGE_PLACEHOLDER, image_token_se, qs)
+        else:
+            qs = re.sub(IMAGE_PLACEHOLDER, DEFAULT_IMAGE_TOKEN, qs)
     else:
-        qs = DEFAULT_IMAGE_TOKEN + '\n' + qs
-    # qs "<image>\nWhere is '棉铃虫' in this image? Please output segmentation mask."
-    conv = conv_templates["llava_v1"].copy() # Conversation(system="A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions.", roles=('USER', 'ASSISTANT'), messages=[], offset=0, sep_style=<SeparatorStyle.TWO: 2>, sep=' ', sep2='</s>', version='v1', skip_next=False)
+        if model.config.mm_use_im_start_end:
+            qs = image_token_se + "\n" + qs
+        else:
+            qs = DEFAULT_IMAGE_TOKEN + "\n" + qs
+    # '<image>\nPlease segment the white horse in this image.'
+    if "llama-2" in model_name.lower():
+        conv_mode = "llava_llama_2"
+    elif "mistral" in model_name.lower():
+        conv_mode = "mistral_instruct"
+    elif "v1.6-34b" in model_name.lower():
+        conv_mode = "chatml_direct"
+    elif "v1" in model_name.lower():
+        conv_mode = "llava_v1" # 进入这里
+    elif "mpt" in model_name.lower():
+        conv_mode = "mpt"
+    else:
+        conv_mode = "llava_v0"
+
+    if args.conv_mode is not None and conv_mode != args.conv_mode: # 'llava_v1'
+        print(
+            "[WARNING] the auto inferred conversation mode is {}, while `--conv-mode` is {}, using {}".format(
+                conv_mode, args.conv_mode, args.conv_mode
+            )
+        )
+    else:
+        args.conv_mode = conv_mode
+
+    conv = conv_templates[conv_mode].copy()
     conv.append_message(conv.roles[0], qs)
     conv.append_message(conv.roles[1], None)
-    prompt = conv.get_prompt() # "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions. USER: <image>\nWhere is '棉铃虫' in this image? Please output segmentation mask. ASSISTANT:"
+    prompt = conv.get_prompt() 
 
-    # 3. 图像预处理（LLaVA CLIP-ViT）
-    image_tensor = process_images([image_new], processor.image_processor, reasoning_model.config)[0] # torch.Size([3, 336, 336])
-    input_ids = tokenizer_image_token(prompt, processor.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt') # torch.Size([66])
+    print("\n" + "=" * 80)
+    print("🟦 HUMAN-READABLE MODEL INPUT PROMPT (完整输入)")
+    print("=" * 80)
+    print(prompt)
+    print("=" * 80 + "\n")
 
-    # 4. LLaVA 生成 coarse mask 序列
+
+    # "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions.USER: <image>\nPlease segment the white horse in this image. ASSISTANT:"
+    # image_files = image_parser(args) # ['images/horses.jpg']
+    images = [Image.open(img_path).convert("RGB")]
+    images_ori = images[0]
+    w_ori, h_ori = images_ori.size
+    images_new = []
+    for image in images:
+        image = image.resize((336, 336), Image.BILINEAR)
+        images_new.append(image)
+
+    image_sizes = [x.size for x in images_new] # [(336, 336)]
+    images = [x for x in images_new] # PIL.Image.Image
+    images_tensor = process_images( # torch.Size([1, 3, 336, 336])
+        images,
+        image_processor,
+        reason_model.config
+    ).to(reason_model.device, dtype=torch.float16)
+
+    input_ids = ( # torch.Size([1, 52])
+        tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
+        .unsqueeze(0)
+        .cuda()
+    )
+
     with torch.inference_mode():
-        output_ids = reasoning_model.generate(
-            input_ids.unsqueeze(0).cuda(),
-            images=[image_tensor.unsqueeze(0).half().cuda()],
-            image_sizes=[(new_h, new_w)],
-            do_sample=False,
-            temperature=0,
-            top_p=None,
-            num_beams=1,
-            max_new_tokens=256,
+        predictor.set_image(np.array(images_ori))
+        output_ids = model.generate( # torch.Size([1, 143])
+            input_ids,
+            images=[images_tensor],
+            image_sizes=image_sizes,
+            do_sample=True if args.temperature > 0 else False,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            num_beams=args.num_beams,
+            max_new_tokens=args.max_new_tokens,
+            use_cache=True,
         )
 
-    # 5. 解码 <seg>...</seg>
-    outputs = processor.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip() # "Sure, Here's the segmentation of the 棉铃虫:\n<seg>棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n</seg>"
+    outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip() # "Sure, the segmented output for 'white horse' is:\n<seg>others *16\n others *16\n others *16\n others *16\n others *16\n others *16\n others *16\n others *16\n others *7| white horse *1| others *8\n others *7| white horse *3| others *6\n others *8| white horse *3| others *5\n others *8| white horse *2| others *6\n others *9| white horse *1| others *6\n others *16\n others *16\n others *16\n</seg>"
 
-    try:
-        mask_labels = outputs.split("<seg>")[1].split("</seg>")[0] # '棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n 棉铃虫 *16\n'
-        mask_labels = decode_mask(mask_labels)  # '棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫|棉铃虫'
-        pred_mask = translate_sequence(mask_labels)
-    except:
-        # generate failure → zero mask
-        pred_mask = [0] * (h * w) # [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ...]
+    print("\n" + "=" * 80)
+    print("🟩 HUMAN-READABLE MODEL OUTPUT TEXT (完整输出)")
+    print("=" * 80)
+    print(outputs)
+    print("=" * 80 + "\n")
 
-    # 6. 修正序列长度
+
+    print(outputs)
+
+    if "<seg>" not in outputs:
+        print("No mask found.")
+        return
+
+    h, w = 24, 24
+
+    # get context between <seg> and </seg>
+    mask_labels = outputs.split("<seg>")[1].split("</seg>")[0] # 'others *16\n others *16\n others *16\n others *16\n others *16\n others *16\n others *16\n others *16\n others *7| white horse *1| others *8\n others *7| white horse *3| others *6\n others *8| white horse *3| others *5\n others *8| white horse *2| others *6\n others *9| white horse *1| others *6\n others *16\n others *16\n others *16\n'
+    mask_labels = decode_mask(mask_labels) # 'others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|white horse|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|white horse|white horse|white horse|others|others|others|others|others|others|others|others|others|others|others|others|others|others|white horse|white horse|white horse|others|others|others|others|others|others|others|others|others|others|others|others|others|white horse|white horse|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|white horse|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others|others'
+    pred_mask = translate_sequence(mask_labels) # [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ...]
     if len(pred_mask) < h * w:
         pred_mask = pred_mask + [pred_mask[-1]] * (h * w - len(pred_mask))
-    else:
-        pred_mask = pred_mask[:h * w] # [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ...]
+    elif len(pred_mask) > h * w:
+        pred_mask = pred_mask[:h * w]
 
-    pred_mask = torch.tensor(pred_mask).reshape(h, w) # torch.Size([24, 24])
+    mask = torch.tensor(pred_mask).reshape(h, w) # torch.Size([24, 24])
 
-    # 二值化
-    pred_mask = (pred_mask > 0).int() # torch.Size([24, 24])
+    mask_pred = F.interpolate(mask.unsqueeze(0).unsqueeze(0).double(), size=(h_ori, w_ori), mode='nearest').squeeze(0).squeeze(0) # torch.Size([1367, 2048])
 
-    # 7. 上采样 coarse mask → 原图大小
-    H, W = image.size[1], image.size[0] # (600, 800)
-    coarse_mask = F.interpolate(pred_mask[None, None].double(), size=(H, W), mode='nearest')[0,0] # torch.Size([600, 800])
+    new_mask_pred = np.zeros((mask_pred.shape[0], mask_pred.shape[1])) # (1367, 2048)
+    unique_classes = np.unique(mask_pred) # (2,)
 
-    # 8. SAM refine
-    predictor.set_image(np.array(image)) # <llava.model.segment_anything.predictor.SamPredictor object at 0x7efa47f43f40>
+    for class_id in unique_classes:
+        # Skip if the class_id is the background (e.g., class 0 if it's background)
+        if class_id == 0:
+            continue
 
-    if 1 not in pred_mask:
-        # no positive region
-        final_mask = np.zeros((H, W), dtype=np.uint8) # (600, 800)
-    else:
-        # coarse logits
-        logits = compute_logits_from_mask(coarse_mask.double())
+        # Create a binary mask for the current class
+        binary_mask = (mask_pred == class_id).to(torch.float64)  # Binary mask for current class torch.Size([1367, 2048])
 
-        # point sampling from coarse mask
-        point_coords, point_labels = masks_sample_points(coarse_mask)
-
-        sam_mask, score, logit = predictor.predict(
-            point_coords=point_coords,
-            point_labels=point_labels,
-            mask_input=logits,
-            multimask_output=False,
-        )
-
-        # 多次 refinement
-        for _ in range(2):
-            sam_mask, score, logit = predictor.predict(
+        try:
+            logits = compute_logits_from_mask(binary_mask) # (1, 256, 256)
+            point_coords, point_labels = masks_sample_points(binary_mask) # (40, 2) (40,)
+            
+            sam_mask, score, logit = predictor.predict( # (1, 1367, 2048) (1,) (1, 256, 256)
                 point_coords=point_coords,
                 point_labels=point_labels,
-                mask_input=logit,
-                multimask_output=False,
+                mask_input=logits,
+                multimask_output=False
             )
 
-        final_mask = sam_mask[0].astype("uint8")
+            for iter in range(2):
+                sam_mask, score, logit = predictor.predict( # (1, 1367, 2048) (1,) (1, 256, 256)
+                    point_coords=point_coords,
+                    point_labels=point_labels,
+                    mask_input=logit,
+                    multimask_output=False
+                )
+            
+        except:
+            # In case of an error, use a zero mask for this class
+            sam_mask = np.zeros((h_ori, w_ori))
 
-    final_mask = torch.tensor(final_mask, dtype=torch.uint8).cuda()   # 如果模型在 GPU torch.Size([600, 800])
-    return final_mask
+        # Add the processed mask back to the new mask for this class
+        new_mask_pred[sam_mask[0] > 0] = class_id # class_id 1.0 new_mask_pred (1367, 2048)
+    sam_mask = new_mask_pred # (1, 1367, 2048)
+    return torch.from_numpy(sam_mask)
 
 
-
-
-def validate(val_loader, epoch, writer,reasoning_model,segmentation_model,processor,test_type="refer"):
+def validate(val_loader, epoch, writer,reasoning_model,predictor,processor,test_type="refer", args=None):
     intersection_meter = AverageMeter("Intersec", ":6.3f", Summary.SUM)
     union_meter = AverageMeter("Union", ":6.3f", Summary.SUM)
     acc_iou_meter = AverageMeter("gIoU", ":6.3f", Summary.SUM)
@@ -904,14 +934,13 @@ def validate(val_loader, epoch, writer,reasoning_model,segmentation_model,proces
     for k,y in pest24_dict.items():
         count_pest[f"count_pest_{y}"] = AverageMeter(f"count_pest_{y}", ":6.3f", Summary.SUM)
         sum_pest[f"sum_pest_{y}"] = AverageMeter(f"sum_pest_{y}", ":6.3f", Summary.SUM)
-    for input_dict in tqdm.tqdm(val_loader):
+    # for input_dict in tqdm.tqdm(val_loader):
+    for i,input_dict in enumerate(tqdm.tqdm(val_loader)):
         torch.cuda.empty_cache()
 
         input_dict = dict_to_cuda(input_dict)
 
-        input_dict["images"] = input_dict["images"]
-        # input_dict["images_clip"] = input_dict["images_clip"].bfloat16()
-
+        import traceback  # <--- 添加这行
 
         questions_list = input_dict['questions_list'][0][0].replace("根据图片回答,", "").strip()
         pest_tex = ','.join(input_dict["text_list"][0])
@@ -919,11 +948,9 @@ def validate(val_loader, epoch, writer,reasoning_model,segmentation_model,proces
 
         if test_type == "refer":
             query = pest_tex
-        elif test_type == "reason":
-            query = questions_list
         masks_list = input_dict['masks_list'][0].int()
         try:
-            output_masks = get_output(query, img_path,reasoning_model,segmentation_model,processor)
+            output_masks = get_output(query, img_path,reasoning_model,predictor,processor, args)
             # output_masks = get_output(
             #     query,
             #     img_path,
@@ -936,6 +963,16 @@ def validate(val_loader, epoch, writer,reasoning_model,segmentation_model,proces
             print(f"[Test Catch] Exception caught: {e}")
             height, width = masks_list.shape[-2], masks_list.shape[-1]
             output_masks = torch.zeros((height, width), dtype=torch.int)
+        # except Exception as e:
+        #     print(f"\n[Test Catch] Exception caught: {e}")
+        #     print("======== Error Stack Trace ========")
+        #     traceback.print_exc()  # <--- 关键：打印详细报错位置
+        #     print("===================================")
+
+        #     # 保持原本的 fallback 逻辑，防止程序中断
+        #     height, width = masks_list.shape[-2], masks_list.shape[-1]
+        #     output_masks = torch.zeros((height, width), dtype=torch.int)
+
 
         all_pests_list = input_dict["all_pest_list"]
         all_bboxes_list = input_dict["all_bbox_list"]
@@ -944,16 +981,11 @@ def validate(val_loader, epoch, writer,reasoning_model,segmentation_model,proces
 
         pred_masks = output_masks.unsqueeze(0)
 
-
-
         # output_list = (pred_masks[0] > 0).int()
         # 假设原始张量形状是 (600, 800)
         # tensor = torch.randn(2, 600, 800)
         # output_list = torch.max(output_list,dim=0)[0].unsqueeze(0)
         # tensor = torch.max(tensor, dim=0)[0].unsqueeze(0)
-
-
-
 
         assert len(pred_masks) == 1
 
@@ -968,6 +1000,7 @@ def validate(val_loader, epoch, writer,reasoning_model,segmentation_model,proces
             masks_list = merged_mask
 
         output_list = pred_masks.to(masks_list.device)
+
         intersection, union, acc_iou = 0.0, 0.0, 0.0
         # bbox_acc_iou = []  # 用于存储每个样本的 bbox IoU 列表
         for mask_i, output_i, bbox_list,all_bbox_list,all_pest_list, all_mask_list in zip(masks_list, output_list, bboxes_list,all_bboxes_list,all_pests_list, all_masks_list):
@@ -1149,17 +1182,35 @@ def validate(val_loader, epoch, writer,reasoning_model,segmentation_model,proces
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--reasoning_model_path", type=str, default="/mnt/data/home/lilanting/shenjie/code/Text4SegHub/checkpoints/llava-v1.5-7b-p16")
+    # parser.add_argument("--reasoning_model_path", type=str, default="/mnt/data/home/lilanting/shenjie/code/Text4SegHub/checkpoints/llava-v1.5-7b-p16")
+    parser.add_argument("--reasoning_model_path", type=str, default="lmc22/text4seg-llava-7b-p24")
     parser.add_argument("--segmentation_model_path", type=str, default="/mnt/data/home/lilanting/shenjie/code/Text4SegHub/llava/model/segment_anything/sam_vit_h_4b8939.pth")
     parser.add_argument("--text", type=str, default="the unusal object in the image")
     parser.add_argument("--image_path", type=str, default="/mnt/data/home/luohuibin/pycharm_wordspace/PestSegVllm_comparison/Seg-Zero-main/assets/test_image.png")
     parser.add_argument("--output_path", type=str, default="./inference_scripts/test_output.png")
+    
+    parser.add_argument("--conv-mode", type=str, default="llava_v1")
+    parser.add_argument("--sep", type=str, default=",")
+    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--top_p", type=float, default=None) 
+    parser.add_argument("--num_beams", type=int, default=1)
+    parser.add_argument("--max_new_tokens", type=int, default=3069)
+
     return parser.parse_args()
 
-from llava.model.segment_anything import SamPredictor, sam_model_registry
-from types import SimpleNamespace
+
+
+def create_data_loader(sub_dataset, tokenizer, image_processor, model_config, collate_fn, batch_size=1, num_workers=4):
+    assert batch_size == 1, "batch_size must be 1"
+    dataset = CustomDataset(sub_dataset, tokenizer, image_processor, model_config)
+    data_loader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, shuffle=False, collate_fn=collate_fn)
+    return data_loader
 
 def main():
+    import debugpy
+    debugpy.listen(("127.0.0.1", 5678))
+    print("✅ Debugpy listening on port 5678... Attach from VSCode now!")
+    debugpy.wait_for_client()
 
     args = parse_args()
 
@@ -1187,7 +1238,7 @@ def main():
     )
     sam = sam_model_registry["vit_h"](checkpoint=args.segmentation_model_path)
     sam = sam.to(dtype=torch.float32, device='cuda')
-    segmentation_model = SamPredictor(sam)
+    predictor = SamPredictor(sam)
 
     reasoning_model.eval()
 
@@ -1202,12 +1253,9 @@ def main():
 
     val_dataset = ValDatasetPest(
         dataset_dir,
-        "/mnt/data/home/luohuibin/Model/clip-vit-large-path14/",
         "ReasonSeg|val",
         1024,
         image_root_path=image_root_path,
-        reason_seg_data_add=reason_seg_data_add,
-        reason_image_root_path=reason_image_root_path
     )
 
     # val_sampler = torch.utils.data.distributed.DistributedSampler(
@@ -1229,9 +1277,19 @@ def main():
 
     writer = SummaryWriter("test")
 
-    validate(val_loader, 0, writer,reasoning_model,segmentation_model,processor, data_type)
+    # val_dataset = ValDataset(args.image_folder, args.dataset_split)
+    # sub_dataset = get_chunk(val_dataset, args.num_chunks, args.chunk_idx)
+
+    # data_loader = create_data_loader(val_dataset, tokenizer, image_processor, reasoning_model.config, collate_fn=partial(
+    #         collate_fn_val,
+    #         conv_type="llava_v1",
+    #         use_mm_start_end=True,
+    #         local_rank=0
+    #     ))
+
+    validate(val_loader, 0, writer,reasoning_model,predictor,processor, data_type, args)
     # out_mask = get_output(query,img_path,reasoning_model,segmentation_model,processor)
 if __name__ == "__main__":
     # os.environ["FLASH_ATTENTION_FORCE_DISABLED"] = "1"
-    os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+    # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
     main()
