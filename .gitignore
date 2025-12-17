@@ -40,3 +40,12 @@ playground/data/coco_stuff
 /.env
 /.vscode/
 /test/
+/debug_results_epoch0/
+/images/
+*.json
+*.png
+*.jpg
+*.txt
+*.xml
+*.csv
+*.xlsx

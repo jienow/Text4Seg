@@ -675,8 +675,7 @@ def get_pest_mask(segment_list):
             mask_basename = mask_file.split('/')[-1]  # 获取最后一个元素
         else:
             mask_basename = mask_file
-        # mask_root_path = "/home/luohuibin/pycharm_workspace/SAM2/pest24_data/Pest24/mask_image/"
-        mask_root_path ="/mnt/data/home/lilanting/shenjie/code/Text4SegHub/soybean/soybean_mask/mask_img/"
+        mask_root_path = "/home/luohuibin/pycharm_workspace/SAM2/pest24_data/Pest24/mask_image/"
         mask_file = os.path.join(mask_root_path, mask_basename)
         # 读取掩码图像
         mask_image = Image.open(mask_file)
@@ -877,7 +876,7 @@ def get_output(query, img_path, reason_model, predictor, processor, args):
 
     if "<seg>" not in outputs:
         print("No mask found.")
-        return
+        raise ValueError("No mask found in the model output.")
 
     h, w = 24, 24
 
@@ -941,9 +940,7 @@ def validate(val_loader, epoch, writer,reasoning_model,segmentation_model,proces
     acc_iou_meter = AverageMeter("gIoU", ":6.3f", Summary.SUM)
 
 
-    # pest24_dict = {'稻飞虱': '1', '稻纵卷叶螟': '2', '二化螟': '3', '黏虫': '5', '棉铃虫': '6', '草地螟': '7', '二点委夜蛾': '8', '斜纹夜蛾': '10', '甜菜夜蛾': '11', '茎蛀虫?': '12', '小壁虎?': '13', '小菜蛾': '14', '': '15', '三叶草夜蛾': '16', '黄地老虎': '24', '小地老虎': '25', '八字地老虎': '28', '大黑鳃金龟': '29', '暗黑鳃金龟': '31', '铜绿丽金龟': '32', '东方蝼蛄': '34', '线虫': '35', '金针虫': '36', '麦蛾': '37'}
-    pest24_dict = {"大豆斜纹夜蛾": 0, "瓢虫": 1, "叶甲": 2, "椿象": 3, "臭虫（成虫）": 4, "臭虫（若虫）": 5, "腹足纲": 6,
-                   "普通角伪叶甲": 7, "稻绿蝽（成虫）": 8, "稻绿蝽（若虫）": 9, "蝗虫": 10, "白纹层夜蛾": 11}
+    pest24_dict = {'稻飞虱': '1', '稻纵卷叶螟': '2', '二化螟': '3', '黏虫': '5', '棉铃虫': '6', '草地螟': '7', '二点委夜蛾': '8', '斜纹夜蛾': '10', '甜菜夜蛾': '11', '茎蛀虫?': '12', '小壁虎?': '13', '小菜蛾': '14', '': '15', '三叶草夜蛾': '16', '黄地老虎': '24', '小地老虎': '25', '八字地老虎': '28', '大黑鳃金龟': '29', '暗黑鳃金龟': '31', '铜绿丽金龟': '32', '东方蝼蛄': '34', '线虫': '35', '金针虫': '36', '麦蛾': '37'}
     count_pest = {}
     sum_pest = {}
 
@@ -1145,13 +1142,9 @@ def validate(val_loader, epoch, writer,reasoning_model,segmentation_model,proces
     # print("count_pest_32: {:.4f}, sum_pest_32: {:.4f}, acc_pest_32: {:.4f}".format(count_pest_32, sum_pest_32,count_pest_32/sum_pest_32))
     # print("count_pest_34: {:.4f}, sum_pest_34: {:.4f}, acc_pest_34: {:.4f}".format(count_pest_34, sum_pest_34, count_pest_34/sum_pest_34))
     # 定义保存路径
-    output_path = "soybean_results.txt"
+    output_path = "results.txt"
     # 以追加模式写入文件
-    import time
     with open(output_path, "a") as f:
-        # 添加时间戳
-        current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        f.write(f"======{current_time}==={test_type}===\n")
         f.write(f"Epoch: {epoch}\n")  # 写入当前 epoch
         f.write("giou: {:.4f}, ciou: {:.4f}\n".format(giou, ciou))
         av_acc = 0
@@ -1160,7 +1153,6 @@ def validate(val_loader, epoch, writer,reasoning_model,segmentation_model,proces
         for n,i in pest24_dict.items():
             if sum_pest[f"sum_pest_{i}"].count != 0:
                 sum_pest_num += 1
-
                 #####可用的2025.1.5
                 # f.write("count_pest_{}: {:.4f}, sum_pest_{}: {:.4f}, acc_pest_{}: {:.4f}\n".format(i,
                 #     count_pest[f"count_pest_{i}"],i, sum_pest[f"sum_pest_{i}"],i, count_pest[f"count_pest_{i}"] / sum_pest[f"sum_pest_{i}"]))
@@ -1214,14 +1206,12 @@ def main():
     args = parse_args()
 
     data_type = "reason"
-    # dataset_dir = "/mnt/data/home/luohuibin/lisa_chechpoint/PestSegVllm_data/cleaned_data/refer_data/dif_data/"
-    # image_root_path = "/mnt/data/home/luohuibin/lisa_chechpoint/PestSegVllm_data/cleaned_data/images/"
-    dataset_dir = "/mnt/data/home/lilanting/shenjie/code/Text4SegHub/soybean/reason/"
-    image_root_path = "/mnt/data/home/lilanting/shenjie/code/Text4SegHub/soybean/soybean/img/"
-    # reason_seg_data_add = "/mnt/data/home/luohuibin/lisa_chechpoint/PestSegVllm_data/cleaned_data/reason_data/medium_data"
-    # reason_image_root_path = "/mnt/data/home/luohuibin/lisa_chechpoint/PestSegVllm_data/cleaned_data/images/"
-    reason_seg_data_add = None
-    reason_image_root_path = None
+    dataset_dir = "/mnt/data/home/luohuibin/lisa_chechpoint/PestSegVllm_data/cleaned_data/refer_data/dif_data/"
+    image_root_path = "/mnt/data/home/luohuibin/lisa_chechpoint/PestSegVllm_data/cleaned_data/images/"
+    reason_seg_data_add = "/mnt/data/home/luohuibin/lisa_chechpoint/PestSegVllm_data/cleaned_data/reason_data/dif_data"
+    reason_image_root_path = "/mnt/data/home/luohuibin/lisa_chechpoint/PestSegVllm_data/cleaned_data/images/"
+    # reason_seg_data_add = None
+    # reason_image_root_path = None
 
     # We recommend enabling flash_attention_2 for better acceleration and memory saving, especially in multi-image and video scenarios.
     # reasoning_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(

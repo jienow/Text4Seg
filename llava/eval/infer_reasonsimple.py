@@ -4,11 +4,13 @@ import json
 from functools import partial
 import cv2
 import random
+import csv
+import time
 from itertools import combinations
 import tqdm
 from torch.utils.tensorboard import SummaryWriter
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 from PIL import Image
 import re
 import numpy as np
@@ -675,8 +677,7 @@ def get_pest_mask(segment_list):
             mask_basename = mask_file.split('/')[-1]  # 获取最后一个元素
         else:
             mask_basename = mask_file
-        # mask_root_path = "/home/luohuibin/pycharm_workspace/SAM2/pest24_data/Pest24/mask_image/"
-        mask_root_path ="/mnt/data/home/lilanting/shenjie/code/Text4SegHub/soybean/soybean_mask/mask_img/"
+        mask_root_path = "/home/luohuibin/pycharm_workspace/SAM2/pest24_data/Pest24/mask_image/"
         mask_file = os.path.join(mask_root_path, mask_basename)
         # 读取掩码图像
         mask_image = Image.open(mask_file)
@@ -849,6 +850,14 @@ def get_output(query, img_path, reason_model, predictor, processor, args):
         .unsqueeze(0)
         .cuda()
     )
+    # 测试时间
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    t_start_e2e = time.time()
+
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    t_llm_start = time.time()
 
     with torch.inference_mode():
         predictor.set_image(np.array(images_ori))
@@ -863,8 +872,20 @@ def get_output(query, img_path, reason_model, predictor, processor, args):
             max_new_tokens=args.max_new_tokens,
             use_cache=True,
         )
+    
+    
 
     outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip() # "Sure, the segmented output for 'white horse' is:\n<seg>others *16\n others *16\n others *16\n others *16\n others *16\n others *16\n others *16\n others *16\n others *7| white horse *1| others *8\n others *7| white horse *3| others *6\n others *8| white horse *3| others *5\n others *8| white horse *2| others *6\n others *9| white horse *1| others *6\n others *16\n others *16\n others *16\n</seg>"
+
+    #大模型结束时间
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    t_llm_end = time.time()
+    t_llm = t_llm_end - t_llm_start
+
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    t_mask_start = time.time()
 
     print("\n" + "=" * 80)
     print("🟩 HUMAN-READABLE MODEL OUTPUT TEXT (完整输出)")
@@ -877,7 +898,7 @@ def get_output(query, img_path, reason_model, predictor, processor, args):
 
     if "<seg>" not in outputs:
         print("No mask found.")
-        return
+        raise ValueError("No mask found in the model output.")
 
     h, w = 24, 24
 
@@ -891,7 +912,7 @@ def get_output(query, img_path, reason_model, predictor, processor, args):
         pred_mask = pred_mask[:h * w]
 
     mask = torch.tensor(pred_mask).reshape(h, w) # torch.Size([24, 24])
-
+    
     mask_pred = F.interpolate(mask.unsqueeze(0).unsqueeze(0).double(), size=(h_ori, w_ori), mode='nearest').squeeze(0).squeeze(0) # torch.Size([1367, 2048])
 
     new_mask_pred = np.zeros((mask_pred.shape[0], mask_pred.shape[1])) # (1367, 2048)
@@ -931,19 +952,34 @@ def get_output(query, img_path, reason_model, predictor, processor, args):
         # Add the processed mask back to the new mask for this class
         new_mask_pred[sam_mask[0] > 0] = class_id # class_id 1.0 new_mask_pred (1367, 2048)
     sam_mask = new_mask_pred # (1, 1367, 2048)
-    return torch.from_numpy(sam_mask)
+
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    t_mask_end = time.time()
+    t_mask_decode = t_mask_end - t_mask_start
+
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    t_e2e_end = time.time()
+    t_e2e = t_e2e_end - t_start_e2e
+
+    return torch.from_numpy(sam_mask), t_e2e, t_llm, t_mask_decode
 
 
 
 def validate(val_loader, epoch, writer,reasoning_model,segmentation_model,processor,test_type="refer",args=None):
+
+    import debugpy
+    debugpy.listen(("127.0.0.1", 5678))
+    print("✅ Debugpy listening on port 5678... Attach from VSCode now!")
+    debugpy.wait_for_client()
+
     intersection_meter = AverageMeter("Intersec", ":6.3f", Summary.SUM)
     union_meter = AverageMeter("Union", ":6.3f", Summary.SUM)
     acc_iou_meter = AverageMeter("gIoU", ":6.3f", Summary.SUM)
 
 
-    # pest24_dict = {'稻飞虱': '1', '稻纵卷叶螟': '2', '二化螟': '3', '黏虫': '5', '棉铃虫': '6', '草地螟': '7', '二点委夜蛾': '8', '斜纹夜蛾': '10', '甜菜夜蛾': '11', '茎蛀虫?': '12', '小壁虎?': '13', '小菜蛾': '14', '': '15', '三叶草夜蛾': '16', '黄地老虎': '24', '小地老虎': '25', '八字地老虎': '28', '大黑鳃金龟': '29', '暗黑鳃金龟': '31', '铜绿丽金龟': '32', '东方蝼蛄': '34', '线虫': '35', '金针虫': '36', '麦蛾': '37'}
-    pest24_dict = {"大豆斜纹夜蛾": 0, "瓢虫": 1, "叶甲": 2, "椿象": 3, "臭虫（成虫）": 4, "臭虫（若虫）": 5, "腹足纲": 6,
-                   "普通角伪叶甲": 7, "稻绿蝽（成虫）": 8, "稻绿蝽（若虫）": 9, "蝗虫": 10, "白纹层夜蛾": 11}
+    pest24_dict = {'稻飞虱': '1', '稻纵卷叶螟': '2', '二化螟': '3', '黏虫': '5', '棉铃虫': '6', '草地螟': '7', '二点委夜蛾': '8', '斜纹夜蛾': '10', '甜菜夜蛾': '11', '茎蛀虫?': '12', '小壁虎?': '13', '小菜蛾': '14', '': '15', '三叶草夜蛾': '16', '黄地老虎': '24', '小地老虎': '25', '八字地老虎': '28', '大黑鳃金龟': '29', '暗黑鳃金龟': '31', '铜绿丽金龟': '32', '东方蝼蛄': '34', '线虫': '35', '金针虫': '36', '麦蛾': '37'}
     count_pest = {}
     sum_pest = {}
 
@@ -969,7 +1005,8 @@ def validate(val_loader, epoch, writer,reasoning_model,segmentation_model,proces
             query = questions_list
         masks_list = input_dict['masks_list'][0].int()
         try:
-            output_masks = get_output(query, img_path,reasoning_model,segmentation_model,processor,args )
+            output_masks,t_e2e, t_llm, t_mask_decode = get_output(query, img_path,reasoning_model,segmentation_model,processor,args )
+            save_sample_times_simple(str(img_path), t_e2e, t_llm, t_mask_decode)
         except Exception as e:
             print(f"[Test Catch] Exception caught: {e}")
             height, width = masks_list.shape[-2], masks_list.shape[-1]
@@ -1145,13 +1182,9 @@ def validate(val_loader, epoch, writer,reasoning_model,segmentation_model,proces
     # print("count_pest_32: {:.4f}, sum_pest_32: {:.4f}, acc_pest_32: {:.4f}".format(count_pest_32, sum_pest_32,count_pest_32/sum_pest_32))
     # print("count_pest_34: {:.4f}, sum_pest_34: {:.4f}, acc_pest_34: {:.4f}".format(count_pest_34, sum_pest_34, count_pest_34/sum_pest_34))
     # 定义保存路径
-    output_path = "soybean_results.txt"
+    output_path = "results_reason_simple.txt"
     # 以追加模式写入文件
-    import time
     with open(output_path, "a") as f:
-        # 添加时间戳
-        current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        f.write(f"======{current_time}==={test_type}===\n")
         f.write(f"Epoch: {epoch}\n")  # 写入当前 epoch
         f.write("giou: {:.4f}, ciou: {:.4f}\n".format(giou, ciou))
         av_acc = 0
@@ -1160,7 +1193,6 @@ def validate(val_loader, epoch, writer,reasoning_model,segmentation_model,proces
         for n,i in pest24_dict.items():
             if sum_pest[f"sum_pest_{i}"].count != 0:
                 sum_pest_num += 1
-
                 #####可用的2025.1.5
                 # f.write("count_pest_{}: {:.4f}, sum_pest_{}: {:.4f}, acc_pest_{}: {:.4f}\n".format(i,
                 #     count_pest[f"count_pest_{i}"],i, sum_pest[f"sum_pest_{i}"],i, count_pest[f"count_pest_{i}"] / sum_pest[f"sum_pest_{i}"]))
@@ -1214,14 +1246,12 @@ def main():
     args = parse_args()
 
     data_type = "reason"
-    # dataset_dir = "/mnt/data/home/luohuibin/lisa_chechpoint/PestSegVllm_data/cleaned_data/refer_data/dif_data/"
-    # image_root_path = "/mnt/data/home/luohuibin/lisa_chechpoint/PestSegVllm_data/cleaned_data/images/"
-    dataset_dir = "/mnt/data/home/lilanting/shenjie/code/Text4SegHub/soybean/reason/"
-    image_root_path = "/mnt/data/home/lilanting/shenjie/code/Text4SegHub/soybean/soybean/img/"
-    # reason_seg_data_add = "/mnt/data/home/luohuibin/lisa_chechpoint/PestSegVllm_data/cleaned_data/reason_data/medium_data"
-    # reason_image_root_path = "/mnt/data/home/luohuibin/lisa_chechpoint/PestSegVllm_data/cleaned_data/images/"
-    reason_seg_data_add = None
-    reason_image_root_path = None
+    dataset_dir = "/mnt/data/home/luohuibin/lisa_chechpoint/PestSegVllm_data/cleaned_data/refer_data/dif_data/"
+    image_root_path = "/mnt/data/home/luohuibin/lisa_chechpoint/PestSegVllm_data/cleaned_data/images/"
+    reason_seg_data_add = "/mnt/data/home/luohuibin/lisa_chechpoint/PestSegVllm_data/cleaned_data/reason_data/simple_data"
+    reason_image_root_path = "/mnt/data/home/luohuibin/lisa_chechpoint/PestSegVllm_data/cleaned_data/images/"
+    # reason_seg_data_add = None
+    # reason_image_root_path = None
 
     # We recommend enabling flash_attention_2 for better acceleration and memory saving, especially in multi-image and video scenarios.
     # reasoning_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
@@ -1284,6 +1314,30 @@ def main():
 
     validate(val_loader, 0, writer,reasoning_model,predictor,processor, data_type, args)
     # out_mask = get_output(query,img_path,reasoning_model,segmentation_model,processor)
+
+
+import torch.distributed as dist
+
+def save_sample_times_simple(time_image_paths, time_e2e, time_llm, time_mask_decode, csv_dir="output_csv"):
+    """
+    每张卡写自己的 CSV 文件，避免多卡冲突
+    """
+    if dist.is_initialized():
+        rank = dist.get_rank()
+    else:
+        rank = 0
+
+    os.makedirs(csv_dir, exist_ok=True)
+    csv_path = os.path.join(csv_dir, f"sample_times_rank{rank}.csv")
+    write_header = not os.path.exists(csv_path)
+
+    with open(csv_path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if write_header:
+            writer.writerow(["time_image_paths", "time_e2e", "time_llm", "time_mask_decode"])
+        writer.writerow([time_image_paths, time_e2e, time_llm, time_mask_decode])
+
+
 if __name__ == "__main__":
     # os.environ["FLASH_ATTENTION_FORCE_DISABLED"] = "1"
     # os.environ["CUDA_VISIBLE_DEVICES"] = "2"

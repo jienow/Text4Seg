@@ -663,8 +663,9 @@ class LazySupervisedDataset(Dataset):
                  data_args: DataArguments):
         super(LazySupervisedDataset, self).__init__()
 
-        # 665k+refseg
-        list_665k = json.load(open('./playground/data/llava_v1_5_mix665k.json', "r"))
+        # 665k+refseg playground/data/json_files
+        # list_665k = json.load(open('./playground/data/llava_v1_5_mix665k.json', "r"))
+        list_665k = json.load(open('./playground/data/json_files/pest24_text4seg_train_combined.json', "r"))
         #list_refcoco = json.load(open('./playground/data/json_files/refcoco_16_two_round_2.json', "r"))
         #list_refcocoplus = json.load(open('./playground/data/json_files/refcoco+_16_two_round_2.json', "r"))
         #list_refcocog = json.load(open('./playground/data/json_files/refcocog_16_two_round_2.json', "r"))
@@ -710,7 +711,10 @@ class LazySupervisedDataset(Dataset):
             image_file = self.list_data_dict[i]['image']
             image_folder = self.data_args.image_folder
             processor = self.data_args.image_processor
-            image = Image.open(os.path.join(image_folder, image_file)).convert('RGB')
+            if not os.path.isabs(image_file):
+                image = Image.open(os.path.join(image_folder, image_file)).convert('RGB')
+            else:
+                image = Image.open(image_file).convert('RGB')
             if self.data_args.image_aspect_ratio == 'pad':
                 def expand2square(pil_img, background_color):
                     width, height = pil_img.size

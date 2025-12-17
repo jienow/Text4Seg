@@ -12,7 +12,7 @@ from enum import Enum
 import torch.distributed as dist
 from torchvision.ops.boxes import box_area
 import numpy as np
-
+import torch.nn.functional as F
 
 def translate_sequence(sequence_str, labels_set):
     """

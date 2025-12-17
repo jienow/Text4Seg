@@ -112,10 +112,10 @@ def eval_model(args):
     # Model
     disable_torch_init()
 
-    import debugpy
-    debugpy.listen(("127.0.0.1", 5678))
-    print("✅ Debugpy listening on port 5678... Attach from VSCode now!")
-    debugpy.wait_for_client()
+    # import debugpy
+    # debugpy.listen(("127.0.0.1", 5678))
+    # print("✅ Debugpy listening on port 5678... Attach from VSCode now!")
+    # debugpy.wait_for_client()
 
     model_name = get_model_name_from_path(args.model_path)
     tokenizer, model, image_processor, context_len = load_pretrained_model(
@@ -165,6 +165,14 @@ def eval_model(args):
     conv.append_message(conv.roles[0], qs)
     conv.append_message(conv.roles[1], None)
     prompt = conv.get_prompt() 
+
+    print("\n" + "=" * 80)
+    print("🟦 HUMAN-READABLE MODEL INPUT PROMPT (完整输入)")
+    print("=" * 80)
+    print(prompt)
+    print("=" * 80 + "\n")
+
+
     # "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions.USER: <image>\nPlease segment the white horse in this image. ASSISTANT:"
     image_files = image_parser(args) # ['images/horses.jpg']
     images = load_images(image_files)
@@ -204,6 +212,13 @@ def eval_model(args):
         )
 
     outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip() # "Sure, the segmented output for 'white horse' is:\n<seg>others *16\n others *16\n others *16\n others *16\n others *16\n others *16\n others *16\n others *16\n others *7| white horse *1| others *8\n others *7| white horse *3| others *6\n others *8| white horse *3| others *5\n others *8| white horse *2| others *6\n others *9| white horse *1| others *6\n others *16\n others *16\n others *16\n</seg>"
+
+    print("\n" + "=" * 80)
+    print("🟩 HUMAN-READABLE MODEL OUTPUT TEXT (完整输出)")
+    print("=" * 80)
+    print(outputs)
+    print("=" * 80 + "\n")
+
 
     print(outputs)
 
@@ -264,7 +279,7 @@ def eval_model(args):
         new_mask_pred[sam_mask[0] > 0] = class_id # class_id 1.0 new_mask_pred (1367, 2048)
     sam_mask = new_mask_pred # (1, 1367, 2048)
 
-    sam_mask_s = sam_mask.astype("uint8") # (1367, 2048)
+    sam_mask_s = (sam_mask * 255).astype("uint8") # (1367, 2048)
     sam_mask_s = Image.fromarray(sam_mask_s).convert('L')
 
     sam_mask_s.save("images/horse_mask.png")

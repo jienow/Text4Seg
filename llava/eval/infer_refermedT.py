@@ -1,34 +1,28 @@
 import argparse
-#from transformers import Qwen2VLForConditionalGeneration, Qwen2_5_VLForConditionalGeneration, AutoProcessor
-# from qwen_vl_utils import process_vision_info
 import torch.nn.functional as F
 import json
 from functools import partial
 import cv2
 import random
+import csv
+import time
 from itertools import combinations
-# from datasets import load_from_disk
 import tqdm
-# import pdb
 from torch.utils.tensorboard import SummaryWriter
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "3"
-from PIL import Image #  as PILImage
+from PIL import Image
 import re
-# from sam2.sam2_image_predictor import SAM2ImagePredictor
 import numpy as np
-# import matplotlib.pyplot as plt
 from enum import Enum
 from llava.model.builder import load_pretrained_model
 from llava.mm_utils import get_model_name_from_path
-from llava.eval.question_answer_list import QUESTION_PARTIAL
 from llava.conversation import conv_templates
 from llava.mm_utils import process_images
 import torch 
-from torchvision import transforms
 
 # LLaVA conversation模板
-from llava.conversation import conv_templates, SeparatorStyle
+from llava.conversation import conv_templates
 
 # 常量：IMAGE_TOKEN、<im_start>、<im_end> 等
 from llava.constants import (
@@ -58,7 +52,7 @@ from llava.eval.utils import (
     # translate_sequence,
     # decode_mask
 )
-from llava.eval.run_llava import translate_sequence
+from llava.eval.run_llava import translate_sequence, decode_mask
 
 # 参考表达生成模板
 from llava.eval.question_answer_list import QUESTION_PARTIAL
@@ -75,21 +69,6 @@ from llava.constants import (
 query_template = "Please segment the {} in this image."
 from llava.model.segment_anything import SamPredictor, sam_model_registry
 from types import SimpleNamespace
-from llava.eval.refer_seg_dataset import ValDataset
-
-from llava.eval.model_refer_seg import CustomDataset
-from torch.utils.data import Dataset, DataLoader
-
-
-def decode_mask(encoded_str):
-    rows = encoded_str.strip("\n").split("\n ")
-    decoded_list = []
-    for row in rows:
-        tokens = row.split("| ")
-        for token in tokens:
-            label, count = token.split(" *")
-            decoded_list.extend([label] * int(count))
-    return "|".join(decoded_list)
 
 ANSWER_LIST_PEST = [
     "是 [SEG]。",
@@ -127,11 +106,16 @@ class ValDatasetPest(torch.utils.data.Dataset):
     def __init__(
         self,
         base_image_dir,
+        vision_tower,
         val_dataset,
         image_size=1024,
         image_root_path=None,
+        reason_seg_data_add=None,
+        reason_image_root_path=None
     ):
         self.image_root_path = image_root_path
+        self.reason_seg_data_add=reason_seg_data_add
+        self.reason_image_root_path=reason_image_root_path
         self.base_image_dir = base_image_dir
         self.answer_list = ANSWER_LIST_PEST
         splits = val_dataset.split("|")
@@ -139,24 +123,53 @@ class ValDatasetPest(torch.utils.data.Dataset):
             ds, split = splits
             images = []
             jsons = []
-            whole_path = os.path.join(base_image_dir, 'reason_seg', ds, "val")
-            if not os.path.exists(whole_path):
-                print(f"路径不存在: {whole_path}")
+            if self.reason_seg_data_add is not None:
+                whole_path = os.path.join(reason_seg_data_add, 'reason_seg', ds, "val")
+                if not os.path.exists(whole_path):
+                    print(f"路径不存在: {whole_path}")
+                image_root_path = self.reason_image_root_path
 
-            image_root_path = self.image_root_path
+                for root, dirs, files in os.walk(whole_path):
+                    for file in files:
+                        json_path = os.path.join(root, file)
+                        assert os.path.exists(json_path)
 
-            for root, dirs, files in os.walk(whole_path):
-                for file in files:
-                    json_path = os.path.join(root, file)
-                    assert os.path.exists(json_path)
+                        jsons.append(json_path)
+                        file_name = file.split(".")[0]
+                        image_file_name = str(file_name) + ".jpg"
 
-                    jsons.append(json_path)
-                    file_name = file.split(".")[0]
-                    image_file_name = str(file_name) + ".jpg"
+                        image_path = os.path.join(image_root_path, image_file_name)
+                        if not os.path.exists(image_path):
+                            image_root_path2 = "/home/luohuibin/pycharm_workspace/PixelLM-main/pest24_data/4k_image"
+                            image_path = os.path.join(image_root_path2, image_file_name)
+                            if not os.path.exists(image_path):
+                                image_path = os.path.join(image_root_path2, str(file_name.replace("xt_", "")) + ".png")
+                        assert os.path.exists(image_path)
+                        images.append(image_path)
+            else:
+                whole_path = os.path.join(base_image_dir, 'reason_seg', ds, "val")
+                if not os.path.exists(whole_path):
+                    print(f"路径不存在: {whole_path}")
 
-                    image_path = os.path.join(image_root_path, image_file_name)
-                    assert os.path.exists(image_path)
-                    images.append(image_path)
+                image_root_path = self.image_root_path
+
+                for root, dirs, files in os.walk(whole_path):
+                    for file in files:
+                        json_path = os.path.join(root, file)
+                        assert os.path.exists(json_path)
+
+                        jsons.append(json_path)
+                        file_name = file.split(".")[0]
+                        image_file_name = str(file_name) + ".jpg"
+
+                        image_path = os.path.join(image_root_path, image_file_name)
+                        if not os.path.exists(image_path):
+                            image_root_path2 = "/home/luohuibin/pycharm_workspace/PixelLM-main/pest24_data/4k_image"
+                            image_path = os.path.join(image_root_path2, image_file_name)
+                            # if not os.path.exists(image_path):
+                            #     image_path = os.path.join(image_root_path2, str(file_name.replace("xt_", "")) + ".png")
+                        assert os.path.exists(image_path)
+                        images.append(image_path)
             self.jsons = jsons
             self.images = images
 
@@ -164,6 +177,9 @@ class ValDatasetPest(torch.utils.data.Dataset):
 
         self.ds = ds
         self.image_size = image_size
+        # self.tokenizer = tokenizer
+        # self.transform = ResizeLongestSide(image_size)
+        # self.clip_image_processor = CLIPImageProcessor.from_pretrained(vision_tower)
         self.class_name_answer = ANSWER_LIST_MODE4_TEMPLATE_PEST
         self.class_name_answer_non = ANSWER_LIST_MODE4_TEMPLATE_NON_PEST
     def __len__(self):
@@ -758,8 +774,6 @@ def extract_bbox_points_think(output_text, x_factor, y_factor):
 
     return content_bbox, points, think_text
 
-
-
 def get_output(query, img_path, reason_model, predictor, processor, args):    
     model_name = get_model_name_from_path(args.reasoning_model_path)
     tokenizer = processor.tokenizer
@@ -836,6 +850,14 @@ def get_output(query, img_path, reason_model, predictor, processor, args):
         .unsqueeze(0)
         .cuda()
     )
+    # 测试时间
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    t_start_e2e = time.time()
+
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    t_llm_start = time.time()
 
     with torch.inference_mode():
         predictor.set_image(np.array(images_ori))
@@ -850,8 +872,20 @@ def get_output(query, img_path, reason_model, predictor, processor, args):
             max_new_tokens=args.max_new_tokens,
             use_cache=True,
         )
+    
+    
 
     outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip() # "Sure, the segmented output for 'white horse' is:\n<seg>others *16\n others *16\n others *16\n others *16\n others *16\n others *16\n others *16\n others *16\n others *7| white horse *1| others *8\n others *7| white horse *3| others *6\n others *8| white horse *3| others *5\n others *8| white horse *2| others *6\n others *9| white horse *1| others *6\n others *16\n others *16\n others *16\n</seg>"
+
+    #大模型结束时间
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    t_llm_end = time.time()
+    t_llm = t_llm_end - t_llm_start
+
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    t_mask_start = time.time()
 
     print("\n" + "=" * 80)
     print("🟩 HUMAN-READABLE MODEL OUTPUT TEXT (完整输出)")
@@ -864,7 +898,7 @@ def get_output(query, img_path, reason_model, predictor, processor, args):
 
     if "<seg>" not in outputs:
         print("No mask found.")
-        return
+        raise ValueError("No mask found in the model output.")
 
     h, w = 24, 24
 
@@ -878,7 +912,7 @@ def get_output(query, img_path, reason_model, predictor, processor, args):
         pred_mask = pred_mask[:h * w]
 
     mask = torch.tensor(pred_mask).reshape(h, w) # torch.Size([24, 24])
-
+    
     mask_pred = F.interpolate(mask.unsqueeze(0).unsqueeze(0).double(), size=(h_ori, w_ori), mode='nearest').squeeze(0).squeeze(0) # torch.Size([1367, 2048])
 
     new_mask_pred = np.zeros((mask_pred.shape[0], mask_pred.shape[1])) # (1367, 2048)
@@ -918,10 +952,22 @@ def get_output(query, img_path, reason_model, predictor, processor, args):
         # Add the processed mask back to the new mask for this class
         new_mask_pred[sam_mask[0] > 0] = class_id # class_id 1.0 new_mask_pred (1367, 2048)
     sam_mask = new_mask_pred # (1, 1367, 2048)
-    return torch.from_numpy(sam_mask)
+
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    t_mask_end = time.time()
+    t_mask_decode = t_mask_end - t_mask_start
+
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    t_e2e_end = time.time()
+    t_e2e = t_e2e_end - t_start_e2e
+
+    return torch.from_numpy(sam_mask), t_e2e, t_llm, t_mask_decode
 
 
-def validate(val_loader, epoch, writer,reasoning_model,predictor,processor,test_type="refer", args=None):
+
+def validate(val_loader, epoch, writer,reasoning_model,segmentation_model,processor,test_type="refer",args=None):
     intersection_meter = AverageMeter("Intersec", ":6.3f", Summary.SUM)
     union_meter = AverageMeter("Union", ":6.3f", Summary.SUM)
     acc_iou_meter = AverageMeter("gIoU", ":6.3f", Summary.SUM)
@@ -934,13 +980,14 @@ def validate(val_loader, epoch, writer,reasoning_model,predictor,processor,test_
     for k,y in pest24_dict.items():
         count_pest[f"count_pest_{y}"] = AverageMeter(f"count_pest_{y}", ":6.3f", Summary.SUM)
         sum_pest[f"sum_pest_{y}"] = AverageMeter(f"sum_pest_{y}", ":6.3f", Summary.SUM)
-    # for input_dict in tqdm.tqdm(val_loader):
-    for i,input_dict in enumerate(tqdm.tqdm(val_loader)):
+    for input_dict in tqdm.tqdm(val_loader):
         torch.cuda.empty_cache()
 
         input_dict = dict_to_cuda(input_dict)
 
-        import traceback  # <--- 添加这行
+        input_dict["images"] = input_dict["images"]
+        # input_dict["images_clip"] = input_dict["images_clip"].bfloat16()
+
 
         questions_list = input_dict['questions_list'][0][0].replace("根据图片回答,", "").strip()
         pest_tex = ','.join(input_dict["text_list"][0])
@@ -948,31 +995,16 @@ def validate(val_loader, epoch, writer,reasoning_model,predictor,processor,test_
 
         if test_type == "refer":
             query = pest_tex
+        elif test_type == "reason":
+            query = questions_list
         masks_list = input_dict['masks_list'][0].int()
         try:
-            output_masks = get_output(query, img_path,reasoning_model,predictor,processor, args)
-            # output_masks = get_output(
-            #     query,
-            #     img_path,
-            #     reasoning_model,
-            #     segmentation_model,
-            #     tokenizer,
-            #     image_processor
-            # )
+            output_masks,t_e2e, t_llm, t_mask_decode = get_output(query, img_path,reasoning_model,segmentation_model,processor,args )
+            save_sample_times_simple(str(img_path), t_e2e, t_llm, t_mask_decode)
         except Exception as e:
             print(f"[Test Catch] Exception caught: {e}")
             height, width = masks_list.shape[-2], masks_list.shape[-1]
             output_masks = torch.zeros((height, width), dtype=torch.int)
-        # except Exception as e:
-        #     print(f"\n[Test Catch] Exception caught: {e}")
-        #     print("======== Error Stack Trace ========")
-        #     traceback.print_exc()  # <--- 关键：打印详细报错位置
-        #     print("===================================")
-
-        #     # 保持原本的 fallback 逻辑，防止程序中断
-        #     height, width = masks_list.shape[-2], masks_list.shape[-1]
-        #     output_masks = torch.zeros((height, width), dtype=torch.int)
-
 
         all_pests_list = input_dict["all_pest_list"]
         all_bboxes_list = input_dict["all_bbox_list"]
@@ -981,11 +1013,16 @@ def validate(val_loader, epoch, writer,reasoning_model,predictor,processor,test_
 
         pred_masks = output_masks.unsqueeze(0)
 
+
+
         # output_list = (pred_masks[0] > 0).int()
         # 假设原始张量形状是 (600, 800)
         # tensor = torch.randn(2, 600, 800)
         # output_list = torch.max(output_list,dim=0)[0].unsqueeze(0)
         # tensor = torch.max(tensor, dim=0)[0].unsqueeze(0)
+
+
+
 
         assert len(pred_masks) == 1
 
@@ -1000,7 +1037,6 @@ def validate(val_loader, epoch, writer,reasoning_model,predictor,processor,test_
             masks_list = merged_mask
 
         output_list = pred_masks.to(masks_list.device)
-
         intersection, union, acc_iou = 0.0, 0.0, 0.0
         # bbox_acc_iou = []  # 用于存储每个样本的 bbox IoU 列表
         for mask_i, output_i, bbox_list,all_bbox_list,all_pest_list, all_mask_list in zip(masks_list, output_list, bboxes_list,all_bboxes_list,all_pests_list, all_masks_list):
@@ -1140,7 +1176,7 @@ def validate(val_loader, epoch, writer,reasoning_model,predictor,processor,test_
     # print("count_pest_32: {:.4f}, sum_pest_32: {:.4f}, acc_pest_32: {:.4f}".format(count_pest_32, sum_pest_32,count_pest_32/sum_pest_32))
     # print("count_pest_34: {:.4f}, sum_pest_34: {:.4f}, acc_pest_34: {:.4f}".format(count_pest_34, sum_pest_34, count_pest_34/sum_pest_34))
     # 定义保存路径
-    output_path = "results.txt"
+    output_path = "results_refer_medium.txt"
     # 以追加模式写入文件
     with open(output_path, "a") as f:
         f.write(f"Epoch: {epoch}\n")  # 写入当前 epoch
@@ -1182,7 +1218,6 @@ def validate(val_loader, epoch, writer,reasoning_model,predictor,processor,test_
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    # parser.add_argument("--reasoning_model_path", type=str, default="/mnt/data/home/lilanting/shenjie/code/Text4SegHub/checkpoints/llava-v1.5-7b-p16")
     parser.add_argument("--reasoning_model_path", type=str, default="lmc22/text4seg-llava-7b-p24")
     parser.add_argument("--segmentation_model_path", type=str, default="/mnt/data/home/lilanting/shenjie/code/Text4SegHub/llava/model/segment_anything/sam_vit_h_4b8939.pth")
     parser.add_argument("--text", type=str, default="the unusal object in the image")
@@ -1195,29 +1230,19 @@ def parse_args():
     parser.add_argument("--top_p", type=float, default=None) 
     parser.add_argument("--num_beams", type=int, default=1)
     parser.add_argument("--max_new_tokens", type=int, default=3069)
-
+    
     return parser.parse_args()
 
 
 
-def create_data_loader(sub_dataset, tokenizer, image_processor, model_config, collate_fn, batch_size=1, num_workers=4):
-    assert batch_size == 1, "batch_size must be 1"
-    dataset = CustomDataset(sub_dataset, tokenizer, image_processor, model_config)
-    data_loader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, shuffle=False, collate_fn=collate_fn)
-    return data_loader
-
 def main():
-    import debugpy
-    debugpy.listen(("127.0.0.1", 5678))
-    print("✅ Debugpy listening on port 5678... Attach from VSCode now!")
-    debugpy.wait_for_client()
 
     args = parse_args()
 
     data_type = "refer"
-    dataset_dir = "/mnt/data/home/luohuibin/lisa_chechpoint/PestSegVllm_data/cleaned_data/refer_data/simple_data/"
+    dataset_dir = "/mnt/data/home/luohuibin/lisa_chechpoint/PestSegVllm_data/cleaned_data/refer_data/medium_data/"
     image_root_path = "/mnt/data/home/luohuibin/lisa_chechpoint/PestSegVllm_data/cleaned_data/images/"
-    # reason_seg_data_add = "/mnt/data/home/luohuibin/lisa_chechpoint/PestSegVllm_data/cleaned_data/reason_data/medium_data"
+    # reason_seg_data_add = "/mnt/data/home/luohuibin/lisa_chechpoint/PestSegVllm_data/cleaned_data/reason_data/simple_data"
     # reason_image_root_path = "/mnt/data/home/luohuibin/lisa_chechpoint/PestSegVllm_data/cleaned_data/images/"
     reason_seg_data_add = None
     reason_image_root_path = None
@@ -1248,14 +1273,18 @@ def main():
     processor.image_processor = image_processor
     processor.tokenizer = tokenizer
 
+
     query = args.text
     img_path  = args.image_path
 
     val_dataset = ValDatasetPest(
         dataset_dir,
+        "/mnt/data/home/luohuibin/Model/clip-vit-large-path14/",
         "ReasonSeg|val",
         1024,
         image_root_path=image_root_path,
+        reason_seg_data_add=reason_seg_data_add,
+        reason_image_root_path=reason_image_root_path
     )
 
     # val_sampler = torch.utils.data.distributed.DistributedSampler(
@@ -1277,19 +1306,33 @@ def main():
 
     writer = SummaryWriter("test")
 
-    # val_dataset = ValDataset(args.image_folder, args.dataset_split)
-    # sub_dataset = get_chunk(val_dataset, args.num_chunks, args.chunk_idx)
-
-    # data_loader = create_data_loader(val_dataset, tokenizer, image_processor, reasoning_model.config, collate_fn=partial(
-    #         collate_fn_val,
-    #         conv_type="llava_v1",
-    #         use_mm_start_end=True,
-    #         local_rank=0
-    #     ))
-
     validate(val_loader, 0, writer,reasoning_model,predictor,processor, data_type, args)
     # out_mask = get_output(query,img_path,reasoning_model,segmentation_model,processor)
+
+
+import torch.distributed as dist
+
+def save_sample_times_simple(time_image_paths, time_e2e, time_llm, time_mask_decode, csv_dir="output_csv"):
+    """
+    每张卡写自己的 CSV 文件，避免多卡冲突
+    """
+    if dist.is_initialized():
+        rank = dist.get_rank()
+    else:
+        rank = 0
+
+    os.makedirs(csv_dir, exist_ok=True)
+    csv_path = os.path.join(csv_dir, f"sample_times_rank{rank}.csv")
+    write_header = not os.path.exists(csv_path)
+
+    with open(csv_path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if write_header:
+            writer.writerow(["time_image_paths", "time_e2e", "time_llm", "time_mask_decode"])
+        writer.writerow([time_image_paths, time_e2e, time_llm, time_mask_decode])
+
+
 if __name__ == "__main__":
     # os.environ["FLASH_ATTENTION_FORCE_DISABLED"] = "1"
-    # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+    # os.environ["CUDA_VISIBLE_DEVICES"] = "2"
     main()
